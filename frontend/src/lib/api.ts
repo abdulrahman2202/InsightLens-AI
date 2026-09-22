@@ -21,39 +21,117 @@ import { PRESET_CHAT_RESPONSES } from '@/data/mockChat';
 /**
  * InsightLens AI API Service Layer
  * 
- * Provides clean async data access interfaces.
- * Currently serves validated local mock data with exact quotes and timestamps.
- * Designed for immediate drop-in replacement with FastAPI backend endpoints.
+ * Connected to FastAPI backend at http://localhost:8000/api/v1
+ * with graceful fallback to validated local structured data.
  */
 
-// Simulated network delay helper for realistic UI states
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 export async function getExperts(): Promise<Expert[]> {
-  await delay(80);
+  try {
+    const res = await fetch(`${BACKEND_URL}/experts`, { next: { revalidate: 60 } });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map((exp: any) => {
+          const local = EXPERTS.find((e) => e.marketId === exp.market);
+          return {
+            id: exp.id || local?.id || exp.market,
+            name: exp.name,
+            role: exp.role,
+            institution: local?.institution,
+            marketId: exp.market as MarketId,
+            country: exp.country,
+            flag: exp.flag,
+            interviewDuration: exp.interview_duration,
+            avatarUrl: local?.avatarUrl || '',
+            description: exp.description || local?.description || '',
+            strategicStance: exp.strategic_stance || local?.strategicStance || '',
+            keyThemes: local?.keyThemes || [],
+            totalInsights: exp.total_insights || 6,
+          };
+        });
+      }
+    }
+  } catch (e) {
+    // Fallback to local verified dataset
+  }
   return [...EXPERTS];
 }
 
 export async function getExpertByMarket(marketId: MarketId): Promise<Expert | undefined> {
-  await delay(80);
-  return EXPERTS.find((e) => e.marketId === marketId);
+  const experts = await getExperts();
+  return experts.find((e) => e.marketId === marketId);
 }
 
 export async function getInterviewQuestions(): Promise<InterviewQuestion[]> {
-  await delay(60);
+  try {
+    const res = await fetch(`${BACKEND_URL}/questions`, { next: { revalidate: 60 } });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map((q: any) => ({
+          id: q.id,
+          shortTitle: q.short_title,
+          fullQuestion: q.full_question,
+          category: q.category,
+          researchRationale: q.research_rationale,
+        }));
+      }
+    }
+  } catch (e) {
+    // Fallback to local verified dataset
+  }
   return [...INTERVIEW_QUESTIONS];
 }
 
 export async function getQuestionById(questionId: number): Promise<InterviewQuestion | undefined> {
-  await delay(50);
-  return INTERVIEW_QUESTIONS.find((q) => q.id === questionId);
+  const questions = await getInterviewQuestions();
+  return questions.find((q) => q.id === questionId);
 }
 
 export async function getAnalysis(
   questionId: number,
   marketFilter?: MarketId | 'all'
 ): Promise<QuestionAnalysis | undefined> {
-  await delay(100);
+  try {
+    const url = new URL(`${BACKEND_URL}/analysis/${questionId}`);
+    if (marketFilter && marketFilter !== 'all') {
+      url.searchParams.set('market', marketFilter);
+    }
+    const res = await fetch(url.toString(), { next: { revalidate: 60 } });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        questionId: data.question_id,
+        aiSummary: data.ai_summary,
+        evidenceCoverage: {
+          totalMarkets: data.evidence_coverage.total_markets,
+          marketsWithEvidence: data.evidence_coverage.markets_with_evidence,
+          label: data.evidence_coverage.label,
+        },
+        evidenceList: data.evidence_list.map((e: any) => {
+          const marketId = (e.market?.toLowerCase() === 'united kingdom' ? 'uk' : e.market?.toLowerCase()) as MarketId;
+          return {
+            expertId: e.expert_name.toLowerCase().replace(/[^a-z]/g, '-'),
+            expertName: e.expert_name,
+            expertRole: e.expert_role,
+            marketId,
+            country: e.country,
+            flag: e.flag,
+            aiAnswer: e.ai_answer,
+            exactQuote: e.exact_quote,
+            timestamp: e.timestamp,
+            source: e.source,
+            sourceTranscriptUrl: `/transcripts/${marketId}?t=${e.timestamp}`,
+          };
+        }),
+      };
+    }
+  } catch (e) {
+    // Fallback
+  }
+
   const analysis = QUESTION_ANALYSES.find((a) => a.questionId === questionId);
   if (!analysis) return undefined;
 
@@ -77,10 +155,10 @@ export async function getExpertAllAnalyses(marketId: MarketId): Promise<{
   analysis: QuestionAnalysis;
   expertEvidence: QuestionAnalysis['evidenceList'][0];
 }[]> {
-  await delay(100);
   const results = [];
-  for (const q of INTERVIEW_QUESTIONS) {
-    const analysis = QUESTION_ANALYSES.find((a) => a.questionId === q.id);
+  const questions = await getInterviewQuestions();
+  for (const q of questions) {
+    const analysis = await getAnalysis(q.id);
     if (analysis) {
       const evidence = analysis.evidenceList.find((e) => e.marketId === marketId);
       if (evidence) {
@@ -96,17 +174,46 @@ export async function getExpertAllAnalyses(marketId: MarketId): Promise<{
 }
 
 export async function getCrossMarketThemes(): Promise<CrossMarketTheme[]> {
-  await delay(80);
   return [...CROSS_MARKET_THEMES];
 }
 
 export async function getComparisonDimensions(): Promise<ComparisonDimension[]> {
-  await delay(80);
   return [...COMPARISON_DIMENSIONS];
 }
 
 export async function getTranscripts(marketFilter?: MarketId | 'all'): Promise<TranscriptSession[]> {
-  await delay(100);
+  try {
+    const url = new URL(`${BACKEND_URL}/transcripts`);
+    if (marketFilter && marketFilter !== 'all') {
+      url.searchParams.set('market', marketFilter);
+    }
+    const res = await fetch(url.toString(), { next: { revalidate: 60 } });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map((session: any) => ({
+          marketId: session.market as MarketId,
+          country: session.country,
+          flag: session.flag,
+          expertName: session.expert_name,
+          expertRole: session.expert_role,
+          duration: session.duration,
+          date: session.date,
+          wordCount: session.word_count,
+          utterances: session.utterances.map((u: any) => ({
+            id: u.id,
+            timestamp: u.timestamp,
+            speaker: u.speaker,
+            isInterviewer: u.is_interviewer,
+            text: u.text,
+          })),
+        }));
+      }
+    }
+  } catch (e) {
+    // Fallback
+  }
+
   if (marketFilter && marketFilter !== 'all') {
     return TRANSCRIPTS.filter((t) => t.marketId === marketFilter);
   }
@@ -114,7 +221,31 @@ export async function getTranscripts(marketFilter?: MarketId | 'all'): Promise<T
 }
 
 export async function getTranscriptByMarket(marketId: MarketId): Promise<TranscriptSession | undefined> {
-  await delay(80);
+  try {
+    const res = await fetch(`${BACKEND_URL}/transcripts/${marketId}`, { next: { revalidate: 60 } });
+    if (res.ok) {
+      const session = await res.json();
+      return {
+        marketId: session.market as MarketId,
+        country: session.country,
+        flag: session.flag,
+        expertName: session.expert_name,
+        expertRole: session.expert_role,
+        duration: session.duration,
+        date: session.date,
+        wordCount: session.word_count,
+        utterances: session.utterances.map((u: any) => ({
+          id: u.id,
+          timestamp: u.timestamp,
+          speaker: u.speaker,
+          isInterviewer: u.is_interviewer,
+          text: u.text,
+        })),
+      };
+    }
+  } catch (e) {
+    // Fallback
+  }
   return TRANSCRIPTS.find((t) => t.marketId === marketId);
 }
 
@@ -132,26 +263,38 @@ export async function searchTranscripts(
   text: string;
   matchedSnippet: string;
 }[]> {
-  await delay(120);
-  if (!query || query.trim().length === 0) return [];
+  try {
+    const targetMarket = marketFilter && marketFilter !== 'all' ? marketFilter : 'all';
+    const url = new URL(`${BACKEND_URL}/transcripts/${targetMarket}/search`);
+    url.searchParams.set('q', query);
+    const res = await fetch(url.toString());
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        return data.map((m: any) => ({
+          utteranceId: m.utterance_id,
+          marketId: m.market as MarketId,
+          country: m.country,
+          flag: m.flag,
+          expertName: m.expert_name,
+          timestamp: m.timestamp,
+          speaker: m.speaker,
+          text: m.text,
+          matchedSnippet: m.text,
+        }));
+      }
+    }
+  } catch (e) {
+    // Fallback to local search
+  }
 
+  if (!query || query.trim().length === 0) return [];
   const q = query.toLowerCase().trim();
   const sessions = marketFilter && marketFilter !== 'all'
     ? TRANSCRIPTS.filter((t) => t.marketId === marketFilter)
     : TRANSCRIPTS;
 
-  const results: {
-    utteranceId: string;
-    marketId: MarketId;
-    country: string;
-    flag: string;
-    expertName: string;
-    timestamp: string;
-    speaker: string;
-    text: string;
-    matchedSnippet: string;
-  }[] = [];
-
+  const results: any[] = [];
   for (const session of sessions) {
     for (const u of session.utterances) {
       if (u.text.toLowerCase().includes(q)) {
@@ -169,15 +312,57 @@ export async function searchTranscripts(
       }
     }
   }
-
   return results;
 }
 
 export async function askAssistant(userQuery: string): Promise<ChatMessage> {
-  await delay(600); // realistic AI response delay
-  const q = userQuery.toLowerCase();
+  // 1. Attempt FastAPI backend RAG call
+  try {
+    const res = await fetch(`${BACKEND_URL}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: userQuery }),
+    });
 
-  // Keyword-based matcher across curated grounded responses
+    if (res.ok) {
+      const data = await res.json();
+      const citations = (data.sources || []).map((s: any) => {
+        const marketLower = (s.market || '').toLowerCase();
+        const marketId: MarketId = marketLower.includes('france')
+          ? 'france'
+          : marketLower.includes('germany')
+          ? 'germany'
+          : 'uk';
+        const flag = marketId === 'france' ? '🇫🇷' : marketId === 'germany' ? '🇩🇪' : '🇬🇧';
+        const country = marketId === 'france' ? 'France' : marketId === 'germany' ? 'Germany' : 'United Kingdom';
+
+        return {
+          expertName: s.expert_name,
+          marketId,
+          country,
+          flag,
+          timestamp: s.timestamp,
+          exactQuote: s.quote,
+          source: s.source,
+        };
+      });
+
+      return {
+        id: `msg-${Date.now()}`,
+        sender: 'assistant',
+        content: data.answer,
+        timestamp: 'Just now',
+        citations,
+        sourcesCount: citations.length,
+        isGrounded: true,
+      };
+    }
+  } catch (err) {
+    // Backend offline or unreachable: gracefully fall back to local verified grounded engine
+  }
+
+  // 2. Client-side grounded fallback engine
+  const q = userQuery.toLowerCase();
   for (const key of Object.keys(PRESET_CHAT_RESPONSES)) {
     const preset = PRESET_CHAT_RESPONSES[key];
     const hasMatch = preset.queryKeywords.some((keyword) => q.includes(keyword));
@@ -194,7 +379,6 @@ export async function askAssistant(userQuery: string): Promise<ChatMessage> {
     }
   }
 
-  // Fallback intelligent synthesis with dynamic evidence extraction
   return {
     id: `msg-${Date.now()}`,
     sender: 'assistant',
