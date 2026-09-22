@@ -12,7 +12,7 @@ export const ComparisonTable: React.FC<ComparisonTableProps> = ({ dimensions }) 
   return (
     <div className="bg-white rounded-3xl border border-stone-200 overflow-hidden shadow-xs">
       <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[760px]">
+        <table className="w-full text-left border-collapse min-w-190">
           <thead>
             <tr className="bg-stone-50 border-b border-stone-200 text-xs font-bold uppercase tracking-wider text-stone-600">
               <th className="py-4 px-5 w-1/4">Insight Dimension</th>
