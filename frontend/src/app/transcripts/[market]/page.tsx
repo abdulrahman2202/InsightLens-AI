@@ -25,6 +25,18 @@ import { TranscriptSession, Expert, MarketId } from '@/types';
 import { copyTextToClipboard, cn } from '@/lib/utils';
 import { useToast } from '@/components/common/Toast';
 
+function normalizeTime(t: string | null | undefined): string {
+  if (!t) return '';
+  const clean = t.trim();
+  const parts = clean.split(':');
+  if (parts.length === 2) {
+    const min = parseInt(parts[0], 10);
+    const sec = parts[1].padStart(2, '0');
+    return `${min < 10 ? '0' : ''}${min}:${sec}`;
+  }
+  return clean;
+}
+
 function TranscriptViewerContent() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -73,14 +85,22 @@ function TranscriptViewerContent() {
   // Handle URL param target timestamp auto-scroll and illumination
   useEffect(() => {
     if (targetTimestamp && session) {
+      const normTarget = normalizeTime(targetTimestamp);
       setActiveHighlightTime(targetTimestamp);
       // Wait for DOM to render
-      setTimeout(() => {
-        const el = utteranceRefs.current[targetTimestamp];
+      const timer = setTimeout(() => {
+        let el = utteranceRefs.current[targetTimestamp] || utteranceRefs.current[normTarget];
+        if (!el) {
+          const matchKey = Object.keys(utteranceRefs.current).find(
+            (k) => normalizeTime(k) === normTarget
+          );
+          if (matchKey) el = utteranceRefs.current[matchKey];
+        }
         if (el) {
           el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
-      }, 250);
+      }, 300);
+      return () => clearTimeout(timer);
     }
   }, [targetTimestamp, session]);
 
@@ -206,7 +226,9 @@ function TranscriptViewerContent() {
           {/* Dialogue turns */}
           <div className="space-y-3">
             {filteredUtterances.map((u) => {
-              const isTarget = activeHighlightTime === u.timestamp;
+              const isTarget = activeHighlightTime
+                ? normalizeTime(activeHighlightTime) === normalizeTime(u.timestamp)
+                : false;
               const isCopied = copiedId === u.id;
 
               return (
@@ -214,6 +236,8 @@ function TranscriptViewerContent() {
                   key={u.id}
                   ref={(el) => {
                     utteranceRefs.current[u.timestamp] = el;
+                    const norm = normalizeTime(u.timestamp);
+                    if (norm) utteranceRefs.current[norm] = el;
                   }}
                   className={cn(
                     'p-4 sm:p-5 rounded-2xl border transition-all duration-300 space-y-2 group',

@@ -25,11 +25,11 @@ import { PRESET_CHAT_RESPONSES } from '@/data/mockChat';
  * with graceful fallback to validated local structured data.
  */
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
 export async function getExperts(): Promise<Expert[]> {
   try {
-    const res = await fetch(`${BACKEND_URL}/experts`, { next: { revalidate: 60 } });
+    const res = await fetch(`${API_BASE_URL}/experts`, { next: { revalidate: 60 } });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
@@ -66,7 +66,7 @@ export async function getExpertByMarket(marketId: MarketId): Promise<Expert | un
 
 export async function getInterviewQuestions(): Promise<InterviewQuestion[]> {
   try {
-    const res = await fetch(`${BACKEND_URL}/questions`, { next: { revalidate: 60 } });
+    const res = await fetch(`${API_BASE_URL}/questions`, { next: { revalidate: 60 } });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
@@ -95,7 +95,7 @@ export async function getAnalysis(
   marketFilter?: MarketId | 'all'
 ): Promise<QuestionAnalysis | undefined> {
   try {
-    const url = new URL(`${BACKEND_URL}/analysis/${questionId}`);
+    const url = new URL(`${API_BASE_URL}/analysis/${questionId}`);
     if (marketFilter && marketFilter !== 'all') {
       url.searchParams.set('market', marketFilter);
     }
@@ -183,7 +183,7 @@ export async function getComparisonDimensions(): Promise<ComparisonDimension[]> 
 
 export async function getTranscripts(marketFilter?: MarketId | 'all'): Promise<TranscriptSession[]> {
   try {
-    const url = new URL(`${BACKEND_URL}/transcripts`);
+    const url = new URL(`${API_BASE_URL}/transcripts`);
     if (marketFilter && marketFilter !== 'all') {
       url.searchParams.set('market', marketFilter);
     }
@@ -222,7 +222,7 @@ export async function getTranscripts(marketFilter?: MarketId | 'all'): Promise<T
 
 export async function getTranscriptByMarket(marketId: MarketId): Promise<TranscriptSession | undefined> {
   try {
-    const res = await fetch(`${BACKEND_URL}/transcripts/${marketId}`, { next: { revalidate: 60 } });
+    const res = await fetch(`${API_BASE_URL}/transcripts/${marketId}`, { next: { revalidate: 60 } });
     if (res.ok) {
       const session = await res.json();
       return {
@@ -265,7 +265,7 @@ export async function searchTranscripts(
 }[]> {
   try {
     const targetMarket = marketFilter && marketFilter !== 'all' ? marketFilter : 'all';
-    const url = new URL(`${BACKEND_URL}/transcripts/${targetMarket}/search`);
+    const url = new URL(`${API_BASE_URL}/transcripts/${targetMarket}/search`);
     url.searchParams.set('q', query);
     const res = await fetch(url.toString());
     if (res.ok) {
@@ -316,9 +316,9 @@ export async function searchTranscripts(
 }
 
 export async function askAssistant(userQuery: string): Promise<ChatMessage> {
-  // 1. Attempt FastAPI backend RAG call
+  // 1. Attempt FastAPI backend RAG call: POST /api/v1/chat with { "question": "<user question>" }
   try {
-    const res = await fetch(`${BACKEND_URL}/chat`, {
+    const res = await fetch(`${API_BASE_URL}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: userQuery }),
@@ -335,6 +335,9 @@ export async function askAssistant(userQuery: string): Promise<ChatMessage> {
           : 'uk';
         const flag = marketId === 'france' ? '🇫🇷' : marketId === 'germany' ? '🇩🇪' : '🇬🇧';
         const country = marketId === 'france' ? 'France' : marketId === 'germany' ? 'Germany' : 'United Kingdom';
+        const sourceDisplay = s.source
+          ? (s.source.includes('Transcript') ? s.source.replace('.txt', '') : `Transcript — ${country}`)
+          : `Transcript — ${country}`;
 
         return {
           expertName: s.expert_name,
@@ -343,7 +346,7 @@ export async function askAssistant(userQuery: string): Promise<ChatMessage> {
           flag,
           timestamp: s.timestamp,
           exactQuote: s.quote,
-          source: s.source,
+          source: sourceDisplay,
         };
       });
 
@@ -356,64 +359,84 @@ export async function askAssistant(userQuery: string): Promise<ChatMessage> {
         sourcesCount: citations.length,
         isGrounded: true,
       };
+    } else {
+      let errorMsg = `FastAPI server error (${res.status})`;
+      try {
+        const errJson = await res.json();
+        if (errJson?.detail) {
+          errorMsg = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+        }
+      } catch (_) {}
+      throw new Error(errorMsg);
     }
-  } catch (err) {
-    // Backend offline or unreachable: gracefully fall back to local verified grounded engine
-  }
+  } catch (err: any) {
+    // Only fall back to local mock data if the backend was completely unreachable (network connection error)
+    const isNetworkError =
+      err?.name === 'TypeError' ||
+      err?.message?.includes('fetch') ||
+      err?.message?.includes('Failed to fetch') ||
+      err?.message?.includes('NetworkError') ||
+      err?.message?.includes('ECONNREFUSED');
 
-  // 2. Client-side grounded fallback engine
-  const q = userQuery.toLowerCase();
-  for (const key of Object.keys(PRESET_CHAT_RESPONSES)) {
-    const preset = PRESET_CHAT_RESPONSES[key];
-    const hasMatch = preset.queryKeywords.some((keyword) => q.includes(keyword));
-    if (hasMatch) {
+    if (isNetworkError) {
+      console.warn('FastAPI backend unreachable, using local fallback:', err.message);
+      const q = userQuery.toLowerCase();
+      for (const key of Object.keys(PRESET_CHAT_RESPONSES)) {
+        const preset = PRESET_CHAT_RESPONSES[key];
+        const hasMatch = preset.queryKeywords.some((keyword) => q.includes(keyword));
+        if (hasMatch) {
+          return {
+            id: `msg-${Date.now()}`,
+            sender: 'assistant',
+            content: preset.aiAnswer,
+            timestamp: 'Just now',
+            citations: preset.citations,
+            sourcesCount: preset.citations.length,
+            isGrounded: true,
+          };
+        }
+      }
+
       return {
         id: `msg-${Date.now()}`,
         sender: 'assistant',
-        content: preset.aiAnswer,
+        content: `Across the French, German, and UK markets, expert perspectives emphasize that successful robotic surgery integration hinges on aligning clinical desire with strict institutional economics and dedicated multi-surgeon training programs. Hospitals that treat robotics as a strategic institutional asset with high utilization achieve positive return on investment.`,
         timestamp: 'Just now',
-        citations: preset.citations,
+        citations: [
+          {
+            expertName: 'Dr. Jean Martin',
+            marketId: 'france',
+            country: 'France',
+            flag: '🇫🇷',
+            timestamp: '01:20',
+            exactQuote: 'The biggest issue is still capital budget approval. Hospitals may like the technology clinically, but purchasing committees need a strong economic case before approving a system.',
+            source: 'Transcript — France',
+          },
+          {
+            expertName: 'Anna Keller',
+            marketId: 'germany',
+            country: 'Germany',
+            flag: '🇩🇪',
+            timestamp: '02:08',
+            exactQuote: 'We look at total cost of ownership, expected procedure volume, maintenance, service contracts and training requirements. A strong clinical case helps, but the economic case decides whether it gets approved.',
+            source: 'Transcript — Germany',
+          },
+          {
+            expertName: 'Dr. Emily Carter',
+            marketId: 'uk',
+            country: 'United Kingdom',
+            flag: '🇬🇧',
+            timestamp: '06:04',
+            exactQuote: 'The key point is that adoption is not just about buying the machine. Hospitals need enough trained people and enough procedure volume to make the programme sustainable.',
+            source: 'Transcript — United Kingdom',
+          },
+        ],
         sourcesCount: 3,
         isGrounded: true,
       };
     }
-  }
 
-  return {
-    id: `msg-${Date.now()}`,
-    sender: 'assistant',
-    content: `Across the French, German, and UK markets, expert perspectives emphasize that successful robotic surgery integration hinges on aligning clinical desire with strict institutional economics and dedicated multi-surgeon training programs. Hospitals that treat robotics as a strategic institutional asset with high utilization achieve positive return on investment.`,
-    timestamp: 'Just now',
-    citations: [
-      {
-        expertName: 'Dr. Jean Martin',
-        marketId: 'france',
-        country: 'France',
-        flag: '🇫🇷',
-        timestamp: '01:20',
-        exactQuote: 'The biggest issue is still capital budget approval. Hospitals may like the technology clinically, but purchasing committees need a strong economic case before approving a system.',
-        source: 'Transcript — France',
-      },
-      {
-        expertName: 'Anna Keller',
-        marketId: 'germany',
-        country: 'Germany',
-        flag: '🇩🇪',
-        timestamp: '02:08',
-        exactQuote: 'We look at total cost of ownership, expected procedure volume, maintenance, service contracts and training requirements. A strong clinical case helps, but the economic case decides whether it gets approved.',
-        source: 'Transcript — Germany',
-      },
-      {
-        expertName: 'Dr. Emily Carter',
-        marketId: 'uk',
-        country: 'United Kingdom',
-        flag: '🇬🇧',
-        timestamp: '06:04',
-        exactQuote: 'The key point is that adoption is not just about buying the machine. Hospitals need enough trained people and enough procedure volume to make the programme sustainable.',
-        source: 'Transcript — United Kingdom',
-      },
-    ],
-    sourcesCount: 3,
-    isGrounded: true,
-  };
+    // Explicit error from FastAPI backend: rethrow so user-friendly UI error is displayed
+    throw err;
+  }
 }

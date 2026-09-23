@@ -96,28 +96,37 @@ class RAGService:
             f"If the evidence does not adequately answer the question, state: 'Insufficient evidence in the provided transcripts.'"
         )
 
-        # 3. Generate answer using Gemini
+        # 3. Generate answer using Gemini with retry backoff
         client = self.get_client()
-        try:
-            response = client.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    temperature=0.1,
+        raw_answer = ""
+        last_err = None
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=settings.GEMINI_MODEL,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION,
+                        temperature=0.1,
+                    )
                 )
-            )
-            raw_answer = response.text.strip() if response.text else ""
-        except APIError as e:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Gemini API error: {str(e)}"
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error generating answer: {str(e)}"
-            )
+                raw_answer = response.text.strip() if response.text else ""
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    import time
+                    time.sleep(1.2 * (attempt + 1))
+                else:
+                    if isinstance(e, APIError):
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=f"Gemini API error: {str(e)}"
+                        )
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Error generating answer: {str(e)}"
+                    )
 
         # 4. Check for insufficient evidence response from LLM
         if (

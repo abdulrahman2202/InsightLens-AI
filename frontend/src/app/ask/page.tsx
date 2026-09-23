@@ -61,8 +61,8 @@ export default function AskAIPage() {
     try {
       const response = await askAssistant(query);
       setMessages((prev) => [...prev, response]);
-    } catch (err) {
-      setError('An error occurred generating the research synthesis. Please try again.');
+    } catch (err: any) {
+      setError(err?.message || 'An error occurred generating the research synthesis. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -191,7 +191,7 @@ export default function AskAIPage() {
                         Supporting Evidence ({msg.citations.length})
                       </span>
                       <span className="text-[11px] text-[#12544F] font-semibold">
-                        Sources used: 3 transcripts
+                        Sources used: {msg.sourcesCount ?? msg.citations.length} {(msg.sourcesCount ?? msg.citations.length) === 1 ? 'source' : 'sources'}
                       </span>
                     </div>
 
@@ -235,6 +235,18 @@ export default function AskAIPage() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {/* When no supporting citations found (e.g. Insufficient evidence) */}
+                {!isUser && (!msg.citations || msg.citations.length === 0) && (
+                  <div className="pt-3 border-t border-stone-100 flex items-center justify-between text-xs text-stone-500">
+                    <span className="text-[11px] font-medium text-stone-400 italic">
+                      No supporting sources found in transcripts.
+                    </span>
+                    <span className="text-[11px] font-semibold text-stone-400">
+                      0 sources
+                    </span>
                   </div>
                 )}
               </div>
