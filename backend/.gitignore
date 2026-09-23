@@ -47,3 +47,6 @@ dist/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# ChromaDB
+chroma_db/
