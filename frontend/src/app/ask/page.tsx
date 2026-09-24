@@ -23,6 +23,34 @@ import { askAssistant } from '@/lib/api';
 import { ChatMessage } from '@/types';
 import { INITIAL_CHAT_MESSAGES, SUGGESTED_QUESTIONS } from '@/data/mockChat';
 import { cn } from '@/lib/utils';
+import ReactMarkdown from 'react-markdown';
+
+/**
+ * Normalizes Markdown strings from assistant responses:
+ * - Converts escaped asterisks (\*) to (*)
+ * - Converts bullet patterns like `* **Heading:**` into proper newline Markdown bullets `- **Heading:**`
+ * - Preserves existing bold formatting (`**...**`)
+ */
+function normalizeMarkdown(content: string): string {
+  if (!content) return '';
+
+  let text = content;
+
+  // 1. Unescape escaped asterisks: \* -> *
+  text = text.replace(/\\\*/g, '*');
+
+  // 2. Convert inline bullet patterns (e.g. "Some text. * **Heading:**" or "Some text. - **Heading:**")
+  // into proper newline Markdown bullets: "- **Heading:**"
+  text = text.replace(/([^\n])\s*(?:[\*\-]|\u2022)\s+(\*\*[^*]+?\*\*)/g, '$1\n- $2');
+
+  // 3. Convert start-of-line asterisk/bullet markers before bold headings into "- **Heading:**"
+  text = text.replace(/^[\t ]*[\*\u2022][\t ]+(\*\*[^*]+?\*\*)/gm, '- $1');
+
+  // 4. Convert start-of-text asterisk/bullet markers before bold headings into "- **Heading:**"
+  text = text.replace(/^\s*[\*\u2022][\t ]+(\*\*[^*]+?\*\*)/, '- $1');
+
+  return text.trim();
+}
 
 export default function AskAIPage() {
   const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
@@ -174,14 +202,27 @@ export default function AskAIPage() {
                 )}
 
                 {/* Content text */}
-                <p
-                  className={cn(
-                    'text-sm sm:text-base leading-relaxed',
-                    isUser ? 'text-white font-medium' : 'text-stone-800'
-                  )}
-                >
-                  {msg.content}
-                </p>
+                {isUser ? (
+                  <p className="text-sm sm:text-base leading-relaxed text-white font-medium">
+                    {msg.content}
+                  </p>
+                ) : (
+                  <div className="text-sm sm:text-base leading-relaxed text-stone-800 space-y-2.5">
+                    <ReactMarkdown
+                      components={{
+                        p: ({ children }) => <p className="leading-relaxed mb-2 last:mb-0">{children}</p>,
+                        ul: ({ children }) => <ul className="list-disc list-outside pl-5 space-y-1.5 my-2">{children}</ul>,
+                        ol: ({ children }) => <ol className="list-decimal list-outside pl-5 space-y-1.5 my-2">{children}</ol>,
+                        li: ({ children }) => <li className="leading-relaxed pl-0.5">{children}</li>,
+                        strong: ({ children }) => <strong className="font-bold text-stone-900">{children}</strong>,
+                        h3: ({ children }) => <h3 className="font-bold text-stone-900 text-base mt-3 mb-1">{children}</h3>,
+                        h4: ({ children }) => <h4 className="font-bold text-stone-900 text-sm mt-2 mb-1">{children}</h4>,
+                      }}
+                    >
+                      {normalizeMarkdown(msg.content)}
+                    </ReactMarkdown>
+                  </div>
+                )}
 
                 {/* Supporting Citations Stack (for assistant) */}
                 {!isUser && msg.citations && msg.citations.length > 0 && (
